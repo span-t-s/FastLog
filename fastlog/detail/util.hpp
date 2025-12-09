@@ -3,6 +3,9 @@
 #include <ctime>
 #include <optional>
 #include <string>
+#include <vector>
+#include <format>
+
 // 平台检测宏
 #ifdef _WIN32
 #include <windows.h>
@@ -10,6 +13,21 @@
 #include <pthread.h>
 #include <unistd.h>
 #endif
+
+// 为 std::vector<int> 添加 formatter 特化
+template <>
+struct std::formatter<std::vector<int>, char> : std::formatter<std::string> {
+    template <class FormatContext>
+    auto format(const std::vector<int>& vec, FormatContext& ctx) const {
+        std::string result = "[";
+        for (size_t i = 0; i < vec.size(); ++i) {
+            if (i > 0) result += ", ";
+            result += std::to_string(vec[i]);
+        }
+        result += "]";
+        return std::formatter<std::string>::format(result, ctx);
+    }
+};
 
 namespace fastlog::detail::util {
 // 非拷贝类，用于防止类被拷贝

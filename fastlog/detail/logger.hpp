@@ -113,10 +113,15 @@ class ConsoleLogger : public BaseLogger<ConsoleLogger> {
 public:
   template <LogLevel level> void log(const logrecord_t &record) {
     LogLevelWrapper level_wrapper(level);
-    std::print("{} [{}{}{}] {} {}:{} {}\n", record.datetime,
-               level_wrapper.to_color(), level_wrapper.to_string(),
-               reset_format(), record.pid, record.file_name, record.line,
-               record.log);
+    // std::print("{} [{}{}{}] {} {}:{} {}\n", record.datetime,
+    //            level_wrapper.to_color(), level_wrapper.to_string(),
+    //            reset_format(), record.pid, record.file_name, record.line,
+    //            record.log);
+    std::cout << std::format("{} [{}{}{}] {} {}:{} {}\n", record.datetime,
+      level_wrapper.to_color(), level_wrapper.to_string(),
+      reset_format(), record.pid, record.file_name, 
+      record.line, record.log);
+
   }
 };
 
