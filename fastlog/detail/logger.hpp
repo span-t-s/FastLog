@@ -117,11 +117,10 @@ public:
     //            level_wrapper.to_color(), level_wrapper.to_string(),
     //            reset_format(), record.pid, record.file_name, record.line,
     //            record.log);
-    std::cout << std::format("{} [{}{}{}] {} {}:{} {}\n", record.datetime,
-      level_wrapper.to_color(), level_wrapper.to_string(),
-      reset_format(), record.pid, record.file_name, 
-      record.line, record.log);
-
+    std::cout << std::format(
+        "{} [{}{}{}] {} {}:{} {}\n", record.datetime, level_wrapper.to_color(),
+        level_wrapper.to_string(), reset_format(), record.pid, record.file_name,
+        record.line, record.log);
   }
 };
 
@@ -137,13 +136,19 @@ public:
   }
 
   ~FileLogger() {
-    // 运行标志位置为false
-    __running = false;
-    // 通知工作线程
-    __cv.notify_one();
-    // 等待工作线程完成工作，回收工作线程
-    if (__work_thread.joinable())
+    __running = false; // 先标记退出
+    {
+      std::lock_guard<std::mutex> lock(__mtx);
+      // 将当前缓冲区剩余数据强制加入满缓冲区列表
+      if (!__current_buffer->empty()) {
+        __full_buffers.push_back(std::move(__current_buffer));
+        __current_buffer = std::make_unique<FileLogBuf>(); // 避免悬空
+      }
+    }
+    __cv.notify_one(); // 唤醒线程（无论是否在等待，确保触发处理）
+    if (__work_thread.joinable()) {
       __work_thread.join();
+    }
   }
 
   /*
@@ -183,7 +188,6 @@ public:
     // 如果当前缓冲区能够容纳msg，就写入当前缓冲区
     if (__current_buffer->writeable() > msg.size()) {
       __current_buffer->write(msg);
-
     } else {
       // 如果当前缓冲区不能容纳msg，就将当前缓冲区移动到满缓冲区列表
       __full_buffers.push_back(std::move(__current_buffer));
@@ -221,37 +225,31 @@ private:
   void work() {
     constexpr std::size_t max_buffer_list_size = 15;
 
-    while (__running) {
+    do { // 先执行一次循环体，再判断是否退出
       std::unique_lock<std::mutex> lock(__mtx);
-      // 等待满缓冲区列表不为空
+      // 等待条件：满缓冲区非空 或 已停止运行（确保析构时能唤醒）
       __cv.wait_for(lock, std::chrono::milliseconds(3),
-                    [this]() -> bool { return !this->__full_buffers.empty(); });
+                    [this]() { return !__full_buffers.empty() || !__running; });
 
-      // 如果缓冲区链表的缓冲区数量过多，只剩2个，其余丢弃掉
-      if (__full_buffers.size() > max_buffer_list_size) {
-        std::cerr << std::format("Dropped log messages {} larger buffers\n",
-                                 __full_buffers.size() - 2);
-        __full_buffers.resize(2);
-      }
-      // 消费满缓冲区列表中的缓冲区，将数据写入文件缓冲区
-      for (auto &buffer : __full_buffers) {
-        __logfs.write(buffer->data(), buffer->size());
-        buffer->reset();
-      }
-      // 如果满缓冲区列表的缓冲区数量超过2个，只保留2个
-      if (__full_buffers.size() > 2) {
-        __full_buffers.resize(2);
+      // 处理满缓冲区中的数据（无论是否退出，都要处理）
+      if (!__full_buffers.empty()) {
+        // 限制缓冲区数量，避免溢出
+        if (__full_buffers.size() > max_buffer_list_size) {
+          std::cerr << std::format("Dropped log messages ({} buffers)\n",
+                                   __full_buffers.size() - 2);
+          __full_buffers.resize(2);
+        }
+        // 写入所有满缓冲区数据
+        for (auto &buffer : __full_buffers) {
+          __logfs.write(buffer->data(), buffer->size());
+          buffer->reset();
+        }
+        // 转移到空缓冲区列表
+        __empty_buffers.splice(__empty_buffers.end(), __full_buffers);
+        __logfs.flush(); // 确保写入文件
       }
 
-      // 如果运行标志为false,且当前缓冲区不为空，则处理关闭前剩余的日志记录，将当前缓冲区数据写入文件
-      if (!__running && !__current_buffer->empty()) {
-        __logfs.write(__current_buffer->data(), __current_buffer->size());
-      }
-      // 刷新文件缓冲区，写入文件
-      __logfs.flush();
-      // 将满缓冲区列表中的缓冲区移动到空缓冲区列表
-      __empty_buffers.splice(__empty_buffers.end(), __full_buffers);
-    }
+    } while (__running); // 循环条件：是否继续运行
   }
 
 private:
